@@ -318,6 +318,13 @@ fn parseDocument(parser: *Parser, backing_allocator: Allocator) !Document {
     doc.xml_decl = try parseElement(parser, allocator, .xml_decl);
     _ = parser.eatWs();
     try skipComments(parser, allocator);
+    _ = parser.eatWs();
+    try skipDoctype(parser);
+    _ = parser.eatWs();
+
+    while( try parseElement(parser, allocator, .xml_decl) ) |_| {
+        _ = parser.eatWs();
+    }
 
     doc.root = (try parseElement(parser, allocator, .element)) orelse return error.InvalidDocument;
     _ = parser.eatWs();
@@ -326,6 +333,12 @@ fn parseDocument(parser: *Parser, backing_allocator: Allocator) !Document {
     if (parser.peek() != null) return error.InvalidDocument;
 
     return doc;
+}
+
+fn skipDoctype(parser: *Parser) !void {
+    if( parser.eatStr("<!") ) {
+        try parser.expectStr("DOCTYPE xml>");
+    }
 }
 
 fn parseAttrValue(parser: *Parser, alloc: Allocator) ![]const u8 {
@@ -423,11 +436,18 @@ fn parseElement(parser: *Parser, alloc: Allocator, comptime kind: ElementKind) !
 
     const tag = switch (kind) {
         .xml_decl => blk: {
-            if (!parser.eatStr("<?") or !mem.eql(u8, try parseNameNoDupe(parser), "xml")) {
+            if (!parser.eatStr("<?") ) {
                 parser.offset = start;
                 return null;
             }
-            break :blk "xml";
+
+            const name = try parseNameNoDupe(parser);
+            if (!mem.eql(u8, name, "xml") and !mem.eql(u8, name, "xml-model")) {
+                parser.offset = start;
+                return null;
+            }
+
+            break :blk name;
         },
         .element => blk: {
             if (!parser.eat('<')) return null;

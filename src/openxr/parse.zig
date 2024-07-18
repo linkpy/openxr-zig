@@ -17,18 +17,18 @@ pub const ParseResult = struct {
     }
 };
 
-pub fn parseXml(backing_allocator: Allocator, root: *xml.Element, api: registry.Api) !ParseResult {
+pub fn parseXml(backing_allocator: Allocator, root: *xml.Element) !ParseResult {
     var arena = ArenaAllocator.init(backing_allocator);
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
 
     const reg = registry.Registry{
-        .decls = try parseDeclarations(allocator, root, api),
-        .api_constants = try parseApiConstants(allocator, root, api),
+        .decls = try parseDeclarations(allocator, root),
+        .api_constants = try parseApiConstants(allocator, root),
         .tags = try parseTags(allocator, root),
-        .features = try parseFeatures(allocator, root, api),
-        .extensions = try parseExtensions(allocator, root, api),
+        .features = try parseFeatures(allocator, root),
+        .extensions = try parseExtensions(allocator, root),
     };
 
     return ParseResult{
@@ -37,7 +37,7 @@ pub fn parseXml(backing_allocator: Allocator, root: *xml.Element, api: registry.
     };
 }
 
-fn parseDeclarations(allocator: Allocator, root: *xml.Element, api: registry.Api) ![]registry.Declaration {
+fn parseDeclarations(allocator: Allocator, root: *xml.Element) ![]registry.Declaration {
     const types_elem = root.findChildByTag("types") orelse return error.InvalidRegistry;
     const commands_elem = root.findChildByTag("commands") orelse return error.InvalidRegistry;
 
@@ -45,20 +45,17 @@ fn parseDeclarations(allocator: Allocator, root: *xml.Element, api: registry.Api
     const decls = try allocator.alloc(registry.Declaration, decl_upper_bound);
 
     var count: usize = 0;
-    count += try parseTypes(allocator, decls, types_elem, api);
-    count += try parseEnums(allocator, decls[count..], root, api);
-    count += try parseCommands(allocator, decls[count..], commands_elem, api);
+    count += try parseTypes(allocator, decls, types_elem);
+    count += try parseEnums(allocator, decls[count..], root);
+    count += try parseCommands(allocator, decls[count..], commands_elem);
     return decls[0..count];
 }
 
-fn parseTypes(allocator: Allocator, out: []registry.Declaration, types_elem: *xml.Element, api: registry.Api) !usize {
+fn parseTypes(allocator: Allocator, out: []registry.Declaration, types_elem: *xml.Element) !usize {
     var i: usize = 0;
     var it = types_elem.findChildrenByTag("type");
     while (it.next()) |ty| {
         out[i] = blk: {
-            if (!requiredByApi(ty, api))
-                continue;
-
             const category = ty.getAttribute("category") orelse {
                 break :blk try parseForeigntype(ty);
             };
@@ -70,11 +67,12 @@ fn parseTypes(allocator: Allocator, out: []registry.Declaration, types_elem: *xm
             } else if (mem.eql(u8, category, "basetype")) {
                 break :blk try parseBaseType(allocator, ty);
             } else if (mem.eql(u8, category, "struct")) {
-                break :blk try parseContainer(allocator, ty, false, api);
+                break :blk try parseContainer(allocator, ty, false);
             } else if (mem.eql(u8, category, "union")) {
-                break :blk try parseContainer(allocator, ty, true, api);
+                break :blk try parseContainer(allocator, ty, true);
             } else if (mem.eql(u8, category, "funcpointer")) {
-                break :blk try parseFuncPointer(allocator, ty);
+                if( try parseFuncPointer(allocator, ty) ) |typ|
+                    break :blk typ;
             } else if (mem.eql(u8, category, "enum")) {
                 break :blk (try parseEnumAlias(ty)) orelse continue;
             }
@@ -87,7 +85,6 @@ fn parseTypes(allocator: Allocator, out: []registry.Declaration, types_elem: *xm
 
     return i;
 }
-
 fn parseForeigntype(ty: *xml.Element) !registry.Declaration {
     const name = ty.getAttribute("name") orelse return error.InvalidRegistry;
     const depends = ty.getAttribute("requires") orelse if (mem.eql(u8, name, "int"))
@@ -111,9 +108,7 @@ fn parseBitmaskType(ty: *xml.Element) !registry.Declaration {
     } else {
         const flags_type = ty.getCharData("type") orelse return error.InvalidRegistry;
 
-        const bitwidth: u8 = if (mem.eql(u8, flags_type, "VkFlags"))
-            32
-        else if (mem.eql(u8, flags_type, "VkFlags64"))
+        const bitwidth: u8 = if (mem.eql(u8, flags_type, "XrFlags64"))
             64
         else
             return error.InvalidRegistry;
@@ -144,8 +139,8 @@ fn parseHandleType(ty: *xml.Element) !registry.Declaration {
     } else {
         const name = ty.getCharData("name") orelse return error.InvalidRegistry;
         const handle_type = ty.getCharData("type") orelse return error.InvalidRegistry;
-        const dispatchable = mem.eql(u8, handle_type, "VK_DEFINE_HANDLE");
-        if (!dispatchable and !mem.eql(u8, handle_type, "VK_DEFINE_NON_DISPATCHABLE_HANDLE")) {
+        const dispatchable = mem.eql(u8, handle_type, "XR_DEFINE_HANDLE");
+        if (!dispatchable and !mem.eql(u8, handle_type, "XR_DEFINE_NON_DISPATCHABLE_HANDLE")) {
             return error.InvalidRegistry;
         }
 
@@ -163,9 +158,18 @@ fn parseHandleType(ty: *xml.Element) !registry.Declaration {
 
 fn parseBaseType(allocator: Allocator, ty: *xml.Element) !registry.Declaration {
     const name = ty.getCharData("name") orelse return error.InvalidRegistry;
-    if (ty.getCharData("type")) |_| {
-        var tok = cparse.XmlCTokenizer.init(ty);
-        return try cparse.parseTypedef(allocator, &tok, false);
+    if (ty.getCharData("type")) |typ| {
+        if( std.mem.eql(u8, typ, "XR_DEFINE_ATOM") or std.mem.eql(u8, typ, "XR_DEFINE_OPAQUE_64") ) {
+            return registry.Declaration{
+                .name = name,
+                .decl_type = .{ .typedef = .{
+                    .name = "uint64_t"
+                }}
+            };
+        } else {
+            var tok = cparse.XmlCTokenizer.init(ty);
+            return try cparse.parseTypedef(allocator, &tok, false);
+        }
     } else {
         // Either ANativeWindow, AHardwareBuffer or CAMetalLayer. The latter has a lot of
         // macros, which is why this part is not built into the xml/c parser.
@@ -176,7 +180,7 @@ fn parseBaseType(allocator: Allocator, ty: *xml.Element) !registry.Declaration {
     }
 }
 
-fn parseContainer(allocator: Allocator, ty: *xml.Element, is_union: bool, api: registry.Api) !registry.Declaration {
+fn parseContainer(allocator: Allocator, ty: *xml.Element, is_union: bool) !registry.Declaration {
     const name = ty.getAttribute("name") orelse return error.InvalidRegistry;
 
     if (ty.getAttribute("alias")) |alias| {
@@ -194,12 +198,9 @@ fn parseContainer(allocator: Allocator, ty: *xml.Element, is_union: bool, api: r
     var it = ty.findChildrenByTag("member");
     var maybe_stype: ?[]const u8 = null;
     while (it.next()) |member| {
-        if (!requiredByApi(member, api))
-            continue;
-
         var xctok = cparse.XmlCTokenizer.init(member);
         members[i] = try cparse.parseMember(allocator, &xctok, false);
-        if (mem.eql(u8, members[i].name, "sType")) {
+        if (mem.eql(u8, members[i].name, "type")) {
             if (member.getAttribute("values")) |stype| {
                 maybe_stype = stype;
             }
@@ -234,13 +235,13 @@ fn parseContainer(allocator: Allocator, ty: *xml.Element, is_union: bool, api: r
     it = ty.findChildrenByTag("member");
     for (members) |*member| {
         const member_elem = while (it.next()) |elem| {
-            if (requiredByApi(elem, api)) break elem;
+            break elem;
         } else unreachable;
 
         try parsePointerMeta(.{ .container = members }, &member.field_type, member_elem);
 
         // pNext isn't always properly marked as optional, so just manually override it,
-        if (mem.eql(u8, member.name, "pNext")) {
+        if (mem.eql(u8, member.name, "next")) {
             member.field_type.pointer.is_optional = true;
         }
     }
@@ -258,7 +259,14 @@ fn parseContainer(allocator: Allocator, ty: *xml.Element, is_union: bool, api: r
     };
 }
 
-fn parseFuncPointer(allocator: Allocator, ty: *xml.Element) !registry.Declaration {
+fn parseFuncPointer(allocator: Allocator, ty: *xml.Element) !?registry.Declaration {
+    if( ty.getCharData("name") ) |name| {
+        // can be easily implemented and is only for the loader interface
+        if( std.mem.eql(u8, name, "PFN_xrCreateApiLayerInstance") ) {
+            return null;
+        }
+    }
+
     var xctok = cparse.XmlCTokenizer.init(ty);
     return try cparse.parseTypedef(allocator, &xctok, true);
 }
@@ -388,18 +396,18 @@ fn parseEnumAlias(elem: *xml.Element) !?registry.Declaration {
     return null;
 }
 
-fn parseEnums(allocator: Allocator, out: []registry.Declaration, root: *xml.Element, api: registry.Api) !usize {
+fn parseEnums(allocator: Allocator, out: []registry.Declaration, root: *xml.Element) !usize {
     var i: usize = 0;
     var it = root.findChildrenByTag("enums");
     while (it.next()) |enums| {
         const name = enums.getAttribute("name") orelse return error.InvalidRegistry;
-        if (mem.eql(u8, name, api_constants_name) or !requiredByApi(enums, api)) {
+        if (mem.eql(u8, name, api_constants_name)) {
             continue;
         }
 
         out[i] = .{
             .name = name,
-            .decl_type = .{ .enumeration = try parseEnumFields(allocator, enums, api) },
+            .decl_type = .{ .enumeration = try parseEnumFields(allocator, enums) },
         };
         i += 1;
     }
@@ -407,7 +415,7 @@ fn parseEnums(allocator: Allocator, out: []registry.Declaration, root: *xml.Elem
     return i;
 }
 
-fn parseEnumFields(allocator: Allocator, elem: *xml.Element, api: registry.Api) !registry.Enum {
+fn parseEnumFields(allocator: Allocator, elem: *xml.Element) !registry.Enum {
     // TODO: `type` was added recently, fall back to checking endswith FlagBits for older versions?
     const enum_type = elem.getAttribute("type") orelse return error.InvalidRegistry;
     const is_bitmask = mem.eql(u8, enum_type, "bitmask");
@@ -425,9 +433,6 @@ fn parseEnumFields(allocator: Allocator, elem: *xml.Element, api: registry.Api) 
     var i: usize = 0;
     var it = elem.findChildrenByTag("enum");
     while (it.next()) |field| {
-        if (!requiredByApi(field, api))
-            continue;
-
         fields[i] = try parseEnumField(field);
         i += 1;
     }
@@ -477,14 +482,11 @@ fn parseEnumField(field: *xml.Element) !registry.Enum.Field {
     };
 }
 
-fn parseCommands(allocator: Allocator, out: []registry.Declaration, commands_elem: *xml.Element, api: registry.Api) !usize {
+fn parseCommands(allocator: Allocator, out: []registry.Declaration, commands_elem: *xml.Element) !usize {
     var i: usize = 0;
     var it = commands_elem.findChildrenByTag("command");
     while (it.next()) |elem| {
-        if (!requiredByApi(elem, api))
-            continue;
-
-        out[i] = try parseCommand(allocator, elem, api);
+        out[i] = try parseCommand(allocator, elem);
         i += 1;
     }
 
@@ -506,7 +508,7 @@ fn splitCommaAlloc(allocator: Allocator, text: []const u8) ![][]const u8 {
     return codes;
 }
 
-fn parseCommand(allocator: Allocator, elem: *xml.Element, api: registry.Api) !registry.Declaration {
+fn parseCommand(allocator: Allocator, elem: *xml.Element) !registry.Declaration {
     if (elem.getAttribute("alias")) |alias| {
         const name = elem.getAttribute("name") orelse return error.InvalidRegistry;
         return registry.Declaration{
@@ -526,9 +528,6 @@ fn parseCommand(allocator: Allocator, elem: *xml.Element, api: registry.Api) !re
     var i: usize = 0;
     var it = elem.findChildrenByTag("param");
     while (it.next()) |param| {
-        if (!requiredByApi(param, api))
-            continue;
-
         var xctok = cparse.XmlCTokenizer.init(param);
         const decl = try cparse.parseParamOrProto(allocator, &xctok, false);
         params[i] = .{
@@ -568,7 +567,7 @@ fn parseCommand(allocator: Allocator, elem: *xml.Element, api: registry.Api) !re
     it = elem.findChildrenByTag("param");
     for (params) |*param| {
         const param_elem = while (it.next()) |param_elem| {
-            if (requiredByApi(param_elem, api)) break param_elem;
+            break param_elem;
         } else unreachable;
 
         try parsePointerMeta(.{ .command = params }, &param.param_type, param_elem);
@@ -587,7 +586,7 @@ fn parseCommand(allocator: Allocator, elem: *xml.Element, api: registry.Api) !re
     };
 }
 
-fn parseApiConstants(allocator: Allocator, root: *xml.Element, api: registry.Api) ![]registry.ApiConstant {
+fn parseApiConstants(allocator: Allocator, root: *xml.Element) ![]registry.ApiConstant {
     var enums = blk: {
         var it = root.findChildrenByTag("enums");
         while (it.next()) |child| {
@@ -619,9 +618,6 @@ fn parseApiConstants(allocator: Allocator, root: *xml.Element, api: registry.Api
     var i: usize = 0;
     var it = enums.findChildrenByTag("enum");
     while (it.next()) |constant| {
-        if (!requiredByApi(constant, api))
-            continue;
-
         const expr = if (constant.getAttribute("value")) |expr|
             expr
         else if (constant.getAttribute("alias")) |alias|
@@ -637,17 +633,14 @@ fn parseApiConstants(allocator: Allocator, root: *xml.Element, api: registry.Api
         i += 1;
     }
 
-    i += try parseDefines(types, constants[i..], api);
+    i += try parseDefines(types, constants[i..]);
     return constants[0..i];
 }
 
-fn parseDefines(types: *xml.Element, out: []registry.ApiConstant, api: registry.Api) !usize {
+fn parseDefines(types: *xml.Element, out: []registry.ApiConstant) !usize {
     var i: usize = 0;
     var it = types.findChildrenByTag("type");
     while (it.next()) |ty| {
-        if (!requiredByApi(ty, api))
-            continue;
-
         const category = ty.getAttribute("category") orelse continue;
         if (!mem.eql(u8, category, "define")) {
             continue;
@@ -690,7 +683,7 @@ fn parseTags(allocator: Allocator, root: *xml.Element) ![]registry.Tag {
     return tags[0..i];
 }
 
-fn parseFeatures(allocator: Allocator, root: *xml.Element, api: registry.Api) ![]registry.Feature {
+fn parseFeatures(allocator: Allocator, root: *xml.Element) ![]registry.Feature {
     var it = root.findChildrenByTag("feature");
     var count: usize = 0;
     while (it.next()) |_| count += 1;
@@ -699,17 +692,14 @@ fn parseFeatures(allocator: Allocator, root: *xml.Element, api: registry.Api) ![
     var i: usize = 0;
     it = root.findChildrenByTag("feature");
     while (it.next()) |feature| {
-        if (!requiredByApi(feature, api))
-            continue;
-
-        features[i] = try parseFeature(allocator, feature, api);
+        features[i] = try parseFeature(allocator, feature);
         i += 1;
     }
 
     return features[0..i];
 }
 
-fn parseFeature(allocator: Allocator, feature: *xml.Element, api: registry.Api) !registry.Feature {
+fn parseFeature(allocator: Allocator, feature: *xml.Element) !registry.Feature {
     const name = feature.getAttribute("name") orelse return error.InvalidRegistry;
     const feature_level = blk: {
         const number = feature.getAttribute("number") orelse return error.InvalidRegistry;
@@ -720,10 +710,7 @@ fn parseFeature(allocator: Allocator, feature: *xml.Element, api: registry.Api) 
     var i: usize = 0;
     var it = feature.findChildrenByTag("require");
     while (it.next()) |require| {
-        if (!requiredByApi(require, api))
-            continue;
-
-        requires[i] = try parseRequire(allocator, require, null, api);
+        requires[i] = try parseRequire(allocator, require, null);
         i += 1;
     }
 
@@ -783,15 +770,21 @@ fn enumExtOffsetToValue(extnumber: u31, offset: u31) u31 {
     return extension_value_base + (extnumber - 1) * extension_block + offset;
 }
 
-fn parseRequire(allocator: Allocator, require: *xml.Element, extnumber: ?u31, api: registry.Api) !registry.Require {
+fn parseRequire(allocator: Allocator, require: *xml.Element, extnumber: ?u31) !registry.Require {
     var n_extends: usize = 0;
     var n_types: usize = 0;
     var n_commands: usize = 0;
+    var n_constants: usize = 0;
 
     var it = require.elements();
     while (it.next()) |elem| {
         if (mem.eql(u8, elem.tag, "enum")) {
-            n_extends += 1;
+            if( elem.getAttribute("extends") != null ) {
+                n_extends += 1;
+            } else {
+                if( elem.getAttribute("value") != null )
+                    n_constants += 1;
+            }
         } else if (mem.eql(u8, elem.tag, "type")) {
             n_types += 1;
         } else if (mem.eql(u8, elem.tag, "command")) {
@@ -802,20 +795,25 @@ fn parseRequire(allocator: Allocator, require: *xml.Element, extnumber: ?u31, ap
     const extends = try allocator.alloc(registry.Require.EnumExtension, n_extends);
     const types = try allocator.alloc([]const u8, n_types);
     const commands = try allocator.alloc([]const u8, n_commands);
+    const constants = try allocator.alloc(registry.Require.Constant, n_constants);
 
     var i_extends: usize = 0;
     var i_types: usize = 0;
     var i_commands: usize = 0;
+    var i_constants: usize = 0;
 
     it = require.elements();
     while (it.next()) |elem| {
-        if (!requiredByApi(elem, api))
-            continue;
-
         if (mem.eql(u8, elem.tag, "enum")) {
             if (try parseEnumExtension(elem, extnumber)) |ext| {
                 extends[i_extends] = ext;
                 i_extends += 1;
+            } else if( elem.getAttribute("value") ) |val| {
+                constants[i_constants] = .{
+                    .name = elem.getAttribute("name").?,
+                    .value = val
+                };
+                i_constants += 1;
             }
         } else if (mem.eql(u8, elem.tag, "type")) {
             types[i_types] = elem.getAttribute("name") orelse return error.InvalidRegistry;
@@ -841,18 +839,17 @@ fn parseRequire(allocator: Allocator, require: *xml.Element, extnumber: ?u31, ap
         .commands = commands[0..i_commands],
         .required_feature_level = required_feature_level,
         .required_extension = require.getAttribute("extension"),
+        .constants = constants[0..i_constants],
     };
 }
 
-fn parseExtensions(allocator: Allocator, root: *xml.Element, api: registry.Api) ![]registry.Extension {
+fn parseExtensions(allocator: Allocator, root: *xml.Element) ![]registry.Extension {
     const extensions_elem = root.findChildByTag("extensions") orelse return error.InvalidRegistry;
 
     const extensions = try allocator.alloc(registry.Extension, extensions_elem.children.len);
     var i: usize = 0;
     var it = extensions_elem.findChildrenByTag("extension");
     while (it.next()) |extension| {
-        if (!requiredByApi(extension, api))
-            continue;
         // Some extensions (in particular 94) are disabled, so just skip them
         if (extension.getAttribute("supported")) |supported| {
             if (mem.eql(u8, supported, "disabled")) {
@@ -860,7 +857,7 @@ fn parseExtensions(allocator: Allocator, root: *xml.Element, api: registry.Api) 
             }
         }
 
-        extensions[i] = try parseExtension(allocator, extension, api);
+        extensions[i] = try parseExtension(allocator, extension);
         i += 1;
     }
 
@@ -883,7 +880,7 @@ fn findExtVersion(extension: *xml.Element) !u32 {
     return error.InvalidRegistry;
 }
 
-fn parseExtension(allocator: Allocator, extension: *xml.Element, api: registry.Api) !registry.Extension {
+fn parseExtension(allocator: Allocator, extension: *xml.Element) !registry.Extension {
     const name = extension.getAttribute("name") orelse return error.InvalidRegistry;
     const platform = extension.getAttribute("platform");
     const version = try findExtVersion(extension);
@@ -898,8 +895,8 @@ fn parseExtension(allocator: Allocator, extension: *xml.Element, api: registry.A
 
     const promoted_to: registry.Extension.Promotion = blk: {
         const promotedto = extension.getAttribute("promotedto") orelse break :blk .none;
-        if (mem.startsWith(u8, promotedto, "VK_VERSION_")) {
-            const feature_level = try splitFeatureLevel(promotedto["VK_VERSION_".len..], "_");
+        if (mem.startsWith(u8, promotedto, "XR_VERSION_")) {
+            const feature_level = try splitFeatureLevel(promotedto["XR_VERSION_".len..], "_");
             break :blk .{ .feature = feature_level };
         }
 
@@ -915,8 +912,6 @@ fn parseExtension(allocator: Allocator, extension: *xml.Element, api: registry.A
         const ext_type_str = extension.getAttribute("type") orelse break :blk null;
         if (mem.eql(u8, ext_type_str, "instance")) {
             break :blk .instance;
-        } else if (mem.eql(u8, ext_type_str, "device")) {
-            break :blk .device;
         } else {
             return error.InvalidRegistry;
         }
@@ -931,9 +926,7 @@ fn parseExtension(allocator: Allocator, extension: *xml.Element, api: registry.A
     var i: usize = 0;
     var it = extension.findChildrenByTag("require");
     while (it.next()) |require| {
-        if (!requiredByApi(require, api))
-            continue;
-        requires[i] = try parseRequire(allocator, require, number, api);
+        requires[i] = try parseRequire(allocator, require, number);
         i += 1;
     }
 
@@ -963,15 +956,4 @@ fn splitFeatureLevel(ver: []const u8, split: []const u8) !registry.FeatureLevel 
         .major = try std.fmt.parseInt(u32, major, 10),
         .minor = try std.fmt.parseInt(u32, minor, 10),
     };
-}
-
-fn requiredByApi(elem: *xml.Element, api: registry.Api) bool {
-    const apis = elem.getAttribute("api") orelse return true; // If the 'api' element is not present, assume required.
-
-    var it = mem.splitScalar(u8, apis, ',');
-    while (it.next()) |required_by_api| {
-        if (std.mem.eql(u8, @tagName(api), required_by_api)) return true;
-    }
-
-    return false;
 }

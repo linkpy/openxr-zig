@@ -11,10 +11,6 @@ pub const GenerateStep = struct {
     generated_file: Build.GeneratedFile,
     /// The path to vk.xml
     spec_path: []const u8,
-    /// The API to generate for.
-    /// Defaults to Vulkan.
-    // Note: VulkanSC is experimental.
-    api: generator.Api = .vulkan,
 
     /// Initialize a Vulkan generation step, for `builder`. `spec_path` is the path to
     /// vk.xml, relative to the project root. The generated bindings will be placed at
@@ -36,22 +32,17 @@ pub const GenerateStep = struct {
         return self;
     }
 
-    /// Initialize a Vulkan generation step for `builder`, by extracting vk.xml from the LunarG installation
+    /// Initialize a Vulkan generation step for `builder`, by extracting xr.xml from the LunarG installation
     /// root. Typically, the location of the LunarG SDK root can be retrieved by querying for the VULKAN_SDK
     /// environment variable, set by activating the environment setup script located in the SDK root.
     /// `builder` and `out_path` are used in the same manner as `init`.
     pub fn createFromSdk(builder: *Build, sdk_path: []const u8, output_name: []const u8) *GenerateStep {
         const spec_path = std.fs.path.join(
             builder.allocator,
-            &[_][]const u8{ sdk_path, "share/vulkan/registry/vk.xml" },
+            &[_][]const u8{ sdk_path, "share/openxr/specification/registry/xr.xml" },
         ) catch unreachable;
 
         return create(builder, spec_path, output_name);
-    }
-
-    /// Set the API to generate for.
-    pub fn setApi(self: *GenerateStep, api_to_generate: generator.Api) void {
-        self.api = api_to_generate;
     }
 
     /// Returns the module with the generated budings, with name `module_name`.
@@ -88,7 +79,7 @@ pub const GenerateStep = struct {
 
         const already_exists = try step.cacheHit(&man);
         const digest = man.final();
-        const output_file_path = try b.cache_root.join(b.allocator, &.{ "o", &digest, "vk.zig" });
+        const output_file_path = try b.cache_root.join(b.allocator, &.{ "o", &digest, "xr.zig" });
         if (already_exists) {
             self.generated_file.path = output_file_path;
             return;
@@ -97,18 +88,18 @@ pub const GenerateStep = struct {
         var out_buffer = std.ArrayList(u8).init(b.allocator);
         generator.generate(b.allocator, self.api, spec, out_buffer.writer()) catch |err| switch (err) {
             error.InvalidXml => {
-                std.log.err("invalid vulkan registry - invalid xml", .{});
-                std.log.err("please check that the correct vk.xml file is passed", .{});
+                std.log.err("invalid openxr registry - invalid xml", .{});
+                std.log.err("please check that the correct xr.xml file is passed", .{});
                 return err;
             },
             error.InvalidRegistry => {
-                std.log.err("invalid vulkan registry - registry is valid xml but contents are invalid", .{});
-                std.log.err("please check that the correct vk.xml file is passed", .{});
+                std.log.err("invalid openxr registry - registry is valid xml but contents are invalid", .{});
+                std.log.err("please check that the correct xr.xml file is passed", .{});
                 return err;
             },
             error.UnhandledBitfieldStruct => {
-                std.log.err("unhandled struct with bit fields detected in vk.xml", .{});
-                std.log.err("this is a bug in vulkan-zig", .{});
+                std.log.err("unhandled struct with bit fields detected in xr.xml", .{});
+                std.log.err("this is a bug in openxr-zig", .{});
                 std.log.err("please make a bug report at https://github.com/Snektron/vulkan-zig/issues/", .{});
                 return err;
             },

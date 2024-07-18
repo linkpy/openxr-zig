@@ -1,8 +1,3 @@
-pub const Api = enum {
-    vulkan,
-    vulkansc,
-};
-
 pub const Registry = struct {
     decls: []Declaration,
     api_constants: []ApiConstant,
@@ -41,7 +36,7 @@ pub const Alias = struct {
 pub const ApiConstant = struct {
     pub const Value = union(enum) {
         expr: []const u8,
-        version: [4][]const u8,
+        version: [3][]const u8,
     };
 
     name: []const u8,
@@ -102,7 +97,7 @@ pub const Bitmask = struct {
 };
 
 pub const Handle = struct {
-    parent: ?[]const u8, // VkInstance has no parent
+    parent: ?[]const u8, // XrInstance has no parent
     is_dispatchable: bool,
 };
 
@@ -166,7 +161,7 @@ pub const Array = struct {
 };
 
 pub const Foreign = struct {
-    depends: []const u8, // Either a header or vk_platform
+    depends: []const u8, // Either a header or openxr_platform_defines
 };
 
 pub const Feature = struct {
@@ -178,7 +173,6 @@ pub const Feature = struct {
 pub const Extension = struct {
     pub const ExtensionType = enum {
         instance,
-        device,
     };
 
     pub const Promotion = union(enum) {
@@ -204,12 +198,17 @@ pub const Require = struct {
         extnumber: ?u31,
         field: Enum.Field,
     };
+    pub const Constant = struct {
+        name: []const u8,
+        value: []const u8,
+    };
 
     extends: []EnumExtension,
     types: []const []const u8,
     commands: []const []const u8,
     required_feature_level: ?FeatureLevel,
     required_extension: ?[]const u8,
+    constants: []const Constant,
 };
 
 pub const FeatureLevel = struct {

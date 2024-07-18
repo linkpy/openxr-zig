@@ -1,9 +1,8 @@
 const std = @import("std");
-const generator = @import("vulkan/generator.zig");
+const generator = @import("openxr/generator.zig");
 
-pub const generateVk = generator.generate;
-pub const VkGenerateStep = @import("vulkan/build_integration.zig").GenerateStep;
-pub const ShaderCompileStep = @import("build_integration.zig").ShaderCompileStep;
+pub const generateXr = generator.generate;
+pub const XrGenerateStep = @import("openxr/build_integration.zig").GenerateStep;
 
 fn invalidUsage(prog_name: []const u8, comptime fmt: []const u8, args: anytype) noreturn {
     std.log.err(fmt, args);
@@ -16,7 +15,7 @@ fn reportParseErrors(tree: std.zig.Ast) !void {
 
     for (tree.errors) |err| {
         const loc = tree.tokenLocation(0, err.token);
-        try stderr.print("(vulkan-zig error):{}:{}: error: ", .{ loc.line + 1, loc.column + 1 });
+        try stderr.print("(openxr-zig error):{}:{}: error: ", .{ loc.line + 1, loc.column + 1 });
         try tree.renderError(err, stderr);
         try stderr.print("\n{s}\n", .{tree.source[loc.line_start..loc.line_end]});
         for (0..loc.column) |_| {
@@ -26,7 +25,7 @@ fn reportParseErrors(tree: std.zig.Ast) !void {
     }
 }
 
-pub fn main() void {
+pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -34,28 +33,24 @@ pub fn main() void {
     var args = std.process.argsWithAllocator(allocator) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM"),
     };
-    const prog_name = args.next() orelse "vulkan-zig-generator";
+    const prog_name = args.next() orelse "openxr-zig-generator";
 
     var maybe_xml_path: ?[]const u8 = null;
     var maybe_out_path: ?[]const u8 = null;
     var debug: bool = false;
-    var api = generator.Api.vulkan;
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             @setEvalBranchQuota(2000);
             std.io.getStdOut().writer().print(
-                \\Utility to generate a Zig binding from the Vulkan XML API registry.
+                \\Utility to generate a Zig binding from the OpenXR XML API registry.
                 \\
-                \\The most recent Vulkan XML API registry can be obtained from
-                \\https://github.com/KhronosGroup/Vulkan-Docs/blob/master/xml/vk.xml,
-                \\and the most recent LunarG Vulkan SDK version can be found at
-                \\$VULKAN_SDK/x86_64/share/vulkan/registry/vk.xml.
+                \\The most recent OpenXR XML API registry can be obtained from
+                \\https://github.com/KhronosGroup/OpenXR-Docs/blob/main/specification/registry/xr.xml.
                 \\
                 \\Usage: {s} [options] <spec xml path> <output zig source>
                 \\Options:
                 \\-h --help        show this message and exit.
-                \\-a --api <api>   Generate API for 'vulkan' or 'vulkansc'. Defaults to 'vulkan'.
                 \\--debug Write out unformatted source if does not parse correctly.
                 \\
             ,
@@ -65,13 +60,6 @@ pub fn main() void {
                 std.process.exit(1);
             };
             return;
-        } else if (std.mem.eql(u8, arg, "-a") or std.mem.eql(u8, arg, "--api")) {
-            const api_str = args.next() orelse {
-                invalidUsage(prog_name, "{s} expects argument <api>", .{arg});
-            };
-            api = std.meta.stringToEnum(generator.Api, api_str) orelse {
-                invalidUsage(prog_name, "invalid api '{s}'", .{api_str});
-            };
         } else if (maybe_xml_path == null) {
             maybe_xml_path = arg;
         } else if (maybe_out_path == null) {
@@ -98,25 +86,25 @@ pub fn main() void {
     };
 
     var out_buffer = std.ArrayList(u8).init(allocator);
-    generator.generate(allocator, api, xml_src, out_buffer.writer()) catch |err| switch (err) {
-        error.InvalidXml => {
-            std.log.err("invalid vulkan registry - invalid xml", .{});
-            std.log.err("please check that the correct vk.xml file is passed", .{});
-            std.process.exit(1);
-        },
-        error.InvalidRegistry => {
-            std.log.err("invalid vulkan registry - registry is valid xml but contents are invalid", .{});
-            std.log.err("please check that the correct vk.xml file is passed", .{});
-            std.process.exit(1);
-        },
-        error.UnhandledBitfieldStruct => {
-            std.log.err("unhandled struct with bit fields detected in vk.xml", .{});
-            std.log.err("this is a bug in vulkan-zig", .{});
-            std.log.err("please make a bug report at https://github.com/Snektron/vulkan-zig/issues/", .{});
-            std.process.exit(1);
-        },
-        error.OutOfMemory => @panic("oom"),
-    };
+    try generator.generate(allocator, xml_src, out_buffer.writer());// catch |err| switch (err) {
+    //     error.InvalidXml => {
+    //         std.log.err("invalid openxr registry - invalid xml", .{});
+    //         std.log.err("please check that the correct xr.xml file is passed", .{});
+    //         std.process.exit(1);
+    //     },
+    //     error.InvalidRegistry => {
+    //         std.log.err("invalid openxr registry - registry is valid xml but contents are invalid", .{});
+    //         std.log.err("please check that the correct xr.xml file is passed", .{});
+    //         std.process.exit(1);
+    //     },
+    //     error.UnhandledBitfieldStruct => {
+    //         std.log.err("unhandled struct with bit fields detected in xr.xml", .{});
+    //         std.log.err("this is a bug in openxr-zig", .{});
+    //         std.log.err("please make a bug report at https://github.com/Snektron/vulkan-zig/issues/", .{});
+    //         std.process.exit(1);
+    //     },
+    //     error.OutOfMemory => @panic("oom"),
+    // };
 
     out_buffer.append(0) catch @panic("oom");
 
@@ -162,5 +150,5 @@ pub fn main() void {
 
 test "main" {
     _ = @import("xml.zig");
-    _ = @import("vulkan/c_parse.zig");
+    _ = @import("openxr/c_parse.zig");
 }

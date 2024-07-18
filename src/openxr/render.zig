@@ -13,10 +13,10 @@ const preamble =
     \\const std = @import("std");
     \\const builtin = @import("builtin");
     \\const root = @import("root");
-    \\const vk = @This();
+    \\const xr = @This();
     \\const Allocator = std.mem.Allocator;
     \\
-    \\pub const vulkan_call_conv: std.builtin.CallingConvention = if (builtin.os.tag == .windows and builtin.cpu.arch == .x86)
+    \\pub const openxr_call_conv: std.builtin.CallingConvention = if (builtin.os.tag == .windows and builtin.cpu.arch == .x86)
     \\        .Stdcall
     \\    else if (builtin.abi == .android and (builtin.cpu.arch.isARM() or builtin.cpu.arch.isThumb()) and std.Target.arm.featureSetHas(builtin.cpu.features, .has_v7) and builtin.cpu.arch.ptrBitWidth() == 32)
     \\        // On Android 32-bit ARM targets, Vulkan functions use the "hardfloat"
@@ -80,27 +80,23 @@ const preamble =
     \\        }
     \\    };
     \\}
-    \\pub fn makeApiVersion(variant: u3, major: u7, minor: u10, patch: u12) u32 {
-    \\    return (@as(u32, variant) << 29) | (@as(u32, major) << 22) | (@as(u32, minor) << 12) | patch;
+    \\pub fn makeApiVersion(major: u16, minor: u16, patch: u32) u64 {
+    \\    return (@as(u32, major) << 48) | (@as(u32, minor) << 32) | patch;
     \\}
-    \\pub fn apiVersionVariant(version: u32) u3 {
-    \\    return @truncate(version >> 29);
+    \\pub fn apiVersionMajor(version: u64) u16 {
+    \\    return @truncate(version >> 48);
     \\}
-    \\pub fn apiVersionMajor(version: u32) u7 {
-    \\    return @truncate(version >> 22);
+    \\pub fn apiVersionMinor(version: u64) u16 {
+    \\    return @truncate(version >> 32);
     \\}
-    \\pub fn apiVersionMinor(version: u32) u10 {
-    \\    return @truncate(version >> 12);
-    \\}
-    \\pub fn apiVersionPatch(version: u32) u12 {
+    \\pub fn apiVersionPatch(version: u64) u32 {
     \\    return @truncate(version);
     \\}
     \\pub const ApiInfo = struct {
     \\    name: [:0]const u8 = "custom",
-    \\    version: u32 = makeApiVersion(0, 0, 0, 0),
+    \\    version: u64 = makeApiVersion(0, 0, 0),
     \\    base_commands: BaseCommandFlags = .{},
     \\    instance_commands: InstanceCommandFlags = .{},
-    \\    device_commands: DeviceCommandFlags = .{},
     \\};
 ;
 
@@ -148,13 +144,11 @@ const foreign_types = std.StaticStringMap([]const u8).initComptime(.{
 const CommandDispatchType = enum {
     base,
     instance,
-    device,
 
     fn name(self: CommandDispatchType) []const u8 {
         return switch (self) {
             .base => "Base",
             .instance => "Instance",
-            .device => "Device",
         };
     }
 
@@ -162,62 +156,58 @@ const CommandDispatchType = enum {
         return switch (self) {
             .base => "base",
             .instance => "instance",
-            .device => "device",
         };
     }
 };
 
 const dispatchable_handles = std.StaticStringMap(CommandDispatchType).initComptime(.{
-    .{ "VkDevice", .device },
-    .{ "VkCommandBuffer", .device },
-    .{ "VkQueue", .device },
-    .{ "VkInstance", .instance },
+    .{ "XrInstance", .instance },
 });
 
 const additional_namespaces = std.StaticStringMap([]const u8).initComptime(.{
     // vkCmdBegin...
-    .{ "VkCommandBuffer", "Cmd" },
+    //.{ "VkCommandBuffer", "Cmd" },
     // vkQueueSubmit...
-    .{ "VkQueue", "Queue" },
+    //.{ "VkQueue", "Queue" },
 });
 
 const dispatch_override_functions = std.StaticStringMap(CommandDispatchType).initComptime(.{
     // See https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#initialization-functionpointers
-    .{ "vkGetInstanceProcAddr", .base },
-    .{ "vkGetDeviceProcAddr", .instance },
+    .{ "xrGetInstanceProcAddr", .base },
+    //.{ "vkGetDeviceProcAddr", .instance },
 
-    .{ "vkEnumerateInstanceVersion", .base },
-    .{ "vkEnumerateInstanceExtensionProperties", .base },
-    .{ "vkEnumerateInstanceLayerProperties", .base },
-    .{ "vkCreateInstance", .base },
+    //.{ "xrEnumerateInstanceVersion", .base },
+    .{ "xrEnumerateInstanceExtensionProperties", .base },
+    .{ "xrEnumerateInstanceLayerProperties", .base },
+    .{ "xrCreateInstance", .base },
 });
 
 // Functions that return an array of objects via a count and data pointer.
 const enumerate_functions = std.StaticStringMap(void).initComptime(.{
-    .{"vkEnumeratePhysicalDevices"},
-    .{"vkEnumeratePhysicalDeviceGroups"},
-    .{"vkGetPhysicalDeviceQueueFamilyProperties"},
-    .{"vkGetPhysicalDeviceQueueFamilyProperties2"},
-    .{"vkEnumerateInstanceLayerProperties"},
-    .{"vkEnumerateInstanceExtensionProperties"},
-    .{"vkEnumerateDeviceLayerProperties"},
-    .{"vkEnumerateDeviceExtensionProperties"},
-    .{"vkGetImageSparseMemoryRequirements"},
-    .{"vkGetImageSparseMemoryRequirements2"},
-    .{"vkGetDeviceImageSparseMemoryRequirements"},
-    .{"vkGetPhysicalDeviceSparseImageFormatProperties"},
-    .{"vkGetPhysicalDeviceSparseImageFormatProperties2"},
-    .{"vkGetPhysicalDeviceToolProperties"},
-    .{"vkGetPipelineCacheData"},
+    //.{"vkEnumeratePhysicalDevices"},
+    //.{"vkEnumeratePhysicalDeviceGroups"},
+    //.{"vkGetPhysicalDeviceQueueFamilyProperties"},
+    //.{"vkGetPhysicalDeviceQueueFamilyProperties2"},
+    .{"xrEnumerateInstanceLayerProperties"},
+    .{"xrEnumerateInstanceExtensionProperties"},
+    //.{"vkEnumerateDeviceLayerProperties"},
+    //.{"vkEnumerateDeviceExtensionProperties"},
+    //.{"vkGetImageSparseMemoryRequirements"},
+    //.{"vkGetImageSparseMemoryRequirements2"},
+    //.{"vkGetDeviceImageSparseMemoryRequirements"},
+    //.{"vkGetPhysicalDeviceSparseImageFormatProperties"},
+    //.{"vkGetPhysicalDeviceSparseImageFormatProperties2"},
+    //.{"vkGetPhysicalDeviceToolProperties"},
+    //.{"vkGetPipelineCacheData"},
 
-    .{"vkGetPhysicalDeviceSurfaceFormatsKHR"},
-    .{"vkGetPhysicalDeviceSurfaceFormats2KHR"},
-    .{"vkGetPhysicalDeviceSurfacePresentModesKHR"},
+    //.{"vkGetPhysicalDeviceSurfaceFormatsKHR"},
+    //.{"vkGetPhysicalDeviceSurfaceFormats2KHR"},
+    //.{"vkGetPhysicalDeviceSurfacePresentModesKHR"},
 
-    .{"vkGetSwapchainImagesKHR"},
-    .{"vkGetPhysicalDevicePresentRectanglesKHR"},
+    //.{"vkGetSwapchainImagesKHR"},
+    //.{"vkGetPhysicalDevicePresentRectanglesKHR"},
 
-    .{"vkGetPhysicalDeviceCalibrateableTimeDomainsKHR"},
+    //.{"vkGetPhysicalDeviceCalibrateableTimeDomainsKHR"},
 });
 
 // Given one of the above commands, returns the type of the array elements
@@ -251,8 +241,8 @@ fn eqlIgnoreCase(lhs: []const u8, rhs: []const u8) bool {
     return true;
 }
 
-pub fn trimVkNamespace(id: []const u8) []const u8 {
-    const prefixes = [_][]const u8{ "VK_", "vk", "Vk", "PFN_vk" };
+pub fn trimXrNamespace(id: []const u8) []const u8 {
+    const prefixes = [_][]const u8{ "XR_", "xr", "Xr", "PFN_xr" };
     for (prefixes) |prefix| {
         if (mem.startsWith(u8, id, prefix)) {
             return id[prefix.len..];
@@ -321,7 +311,7 @@ fn Renderer(comptime WriterType: type) type {
                 result.value_ptr.* = &decl.decl_type;
             }
 
-            const vk_structure_type_decl = declarations_by_name.get("VkStructureType") orelse return error.InvalidRegistry;
+            const vk_structure_type_decl = declarations_by_name.get("XrStructureType") orelse return error.InvalidRegistry;
             const vk_structure_type = switch (vk_structure_type_decl.*) {
                 .enumeration => |e| e,
                 else => return error.InvalidRegistry,
@@ -463,7 +453,7 @@ fn Renderer(comptime WriterType: type) type {
             }
 
             for (container.fields) |field| {
-                if (mem.eql(u8, field.name, "pNext")) {
+                if (mem.eql(u8, field.name, "next")) {
                     return true;
                 }
             }
@@ -486,7 +476,7 @@ fn Renderer(comptime WriterType: type) type {
                         const child_name = ptr.child.name;
                         if (mem.eql(u8, child_name, "void")) {
                             return .other;
-                        } else if (builtin_types.get(child_name) == null and trimVkNamespace(child_name).ptr == child_name.ptr) {
+                        } else if (builtin_types.get(child_name) == null and trimXrNamespace(child_name).ptr == child_name.ptr) {
                             return .other; // External type
                         }
                     }
@@ -545,6 +535,24 @@ fn Renderer(comptime WriterType: type) type {
 
             for (self.registry.api_constants) |api_constant| {
                 try self.renderApiConstant(api_constant);
+            }
+
+            for( self.registry.extensions ) |extension| {
+                for( extension.requires ) |requires| {
+                    if( requires.constants.len > 0 ) {
+                        try self.writer.writeAll("// Constants from ");
+                        try self.writer.writeAll(extension.name);
+                        try self.writer.writeAll("\r\n");
+
+                        for( requires.constants ) |cnst| {
+                            try self.writer.writeAll("pub const ");
+                            try self.renderName(cnst.name);
+                            try self.writer.writeAll(" = ");
+                            try self.writer.writeAll(cnst.value);
+                            try self.writer.writeAll(";\r\n");
+                        }
+                    }
+                }
             }
 
             for (self.registry.decls) |decl| {
@@ -652,25 +660,25 @@ fn Renderer(comptime WriterType: type) type {
                 return;
             } else if (try self.extractBitflagName(name)) |bitflag_name| {
                 try self.writeIdentifierFmt("{s}Flags{s}{s}", .{
-                    trimVkNamespace(bitflag_name.base_name),
+                    trimXrNamespace(bitflag_name.base_name),
                     @as([]const u8, if (bitflag_name.revision) |revision| revision else ""),
                     @as([]const u8, if (bitflag_name.tag) |tag| tag else ""),
                 });
                 return;
-            } else if (mem.startsWith(u8, name, "vk")) {
+            } else if (mem.startsWith(u8, name, "xr")) {
                 // Function type, always render with the exact same text for linking purposes.
                 try self.writeIdentifier(name);
                 return;
-            } else if (mem.startsWith(u8, name, "Vk")) {
+            } else if (mem.startsWith(u8, name, "Xr")) {
                 // Type, strip namespace and write, as they are alreay in title case.
                 try self.writeIdentifier(name[2..]);
                 return;
-            } else if (mem.startsWith(u8, name, "PFN_vk")) {
+            } else if (mem.startsWith(u8, name, "PFN_xr")) {
                 // Function pointer type, strip off the PFN_vk part and replace it with Pfn. Note that
                 // this function is only called to render the typedeffed function pointers like vkVoidFunction
                 try self.writeIdentifierFmt("Pfn{s}", .{name[6..]});
                 return;
-            } else if (mem.startsWith(u8, name, "VK_")) {
+            } else if (mem.startsWith(u8, name, "XR_")) {
                 // Constants
                 try self.writeIdentifier(name[3..]);
                 return;
@@ -692,7 +700,7 @@ fn Renderer(comptime WriterType: type) type {
                     if (param.param_type == .name) {
                         if (try self.extractBitflagName(param.param_type.name)) |bitflag_name| {
                             try self.writeIdentifierFmt("{s}Flags{s}{s}", .{
-                                trimVkNamespace(bitflag_name.base_name),
+                                trimXrNamespace(bitflag_name.base_name),
                                 @as([]const u8, if (bitflag_name.revision) |revision| revision else ""),
                                 @as([]const u8, if (bitflag_name.tag) |tag| tag else ""),
                             });
@@ -708,7 +716,7 @@ fn Renderer(comptime WriterType: type) type {
 
                 try self.writer.writeAll(", ");
             }
-            try self.writer.writeAll(") callconv(vulkan_call_conv)");
+            try self.writer.writeAll(") callconv(openxr_call_conv)");
             try self.renderTypeInfo(command_ptr.return_type.*);
         }
 
@@ -741,7 +749,14 @@ fn Renderer(comptime WriterType: type) type {
             try self.writer.writeByte('[');
             switch (array.size) {
                 .int => |size| try self.writer.print("{}", .{size}),
-                .alias => |alias| try self.renderName(alias),
+                .alias => |alias| {
+                    if( std.mem.eql(u8, alias, "XR_EYE_POSITION_COUNT_FB") ) {
+                        // exception since it's an enum value
+                        try self.writer.writeAll("EyePositionFB.count_fb");
+                    } else {
+                        try self.renderName(alias);
+                    }
+                },
             }
             try self.writer.writeByte(']');
             try self.renderTypeInfo(array.child.*);
@@ -762,68 +777,70 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderSpecialContainer(self: *Self, name: []const u8) !bool {
-            const maybe_author = self.id_renderer.getAuthorTag(name);
-            const basename = self.id_renderer.stripAuthorTag(name);
-            if (std.mem.eql(u8, basename, "VkAccelerationStructureInstance")) {
-                try self.writer.print(
-                    \\extern struct {{
-                    \\    transform: TransformMatrix{s},
-                    \\    instance_custom_index_and_mask: packed struct(u32) {{
-                    \\        instance_custom_index: u24,
-                    \\        mask: u8,
-                    \\    }},
-                    \\    instance_shader_binding_table_record_offset_and_flags: packed struct(u32) {{
-                    \\        instance_shader_binding_table_record_offset: u24,
-                    \\        flags: u8, // GeometryInstanceFlagsKHR
-                    \\    }},
-                    \\    acceleration_structure_reference: u64,
-                    \\}};
-                    \\
-                ,
-                    .{maybe_author orelse ""},
-                );
-                return true;
-            } else if (std.mem.eql(u8, basename, "VkAccelerationStructureSRTMotionInstance")) {
-                try self.writer.print(
-                    \\extern struct {{
-                    \\    transform_t0: SRTData{0s},
-                    \\    transform_t1: SRTData{0s},
-                    \\    instance_custom_index_and_mask: packed struct(u32) {{
-                    \\        instance_custom_index: u24,
-                    \\        mask: u8,
-                    \\    }},
-                    \\    instance_shader_binding_table_record_offset_and_flags: packed struct(u32) {{
-                    \\        instance_shader_binding_table_record_offset: u24,
-                    \\        flags: u8, // GeometryInstanceFlagsKHR
-                    \\    }},
-                    \\    acceleration_structure_reference: u64,
-                    \\}};
-                    \\
-                ,
-                    .{maybe_author orelse ""},
-                );
-                return true;
-            } else if (std.mem.eql(u8, basename, "VkAccelerationStructureMatrixMotionInstance")) {
-                try self.writer.print(
-                    \\extern struct {{
-                    \\    transform_t0: TransformMatrix{0s},
-                    \\    transform_t1: TransformMatrix{0s},
-                    \\    instance_custom_index_and_mask: packed struct(u32) {{
-                    \\        instance_custom_index: u24,
-                    \\        mask: u8,
-                    \\    }},
-                    \\    instance_shader_binding_table_record_offset_and_flags: packed struct(u32) {{
-                    \\        instance_shader_binding_table_record_offset: u24,
-                    \\        flags: u8, // GeometryInstanceFlagsKHR
-                    \\    }},
-                    \\    acceleration_structure_reference: u64,
-                    \\}};
-                    \\
-                ,
-                    .{maybe_author orelse ""},
-                );
-                return true;
-            }
+            _ = self;
+            _ = name;
+            //const maybe_author = self.id_renderer.getAuthorTag(name);
+            //const basename = self.id_renderer.stripAuthorTag(name);
+            // if (std.mem.eql(u8, basename, "VkAccelerationStructureInstance")) {
+            //     try self.writer.print(
+            //         \\extern struct {{
+            //         \\    transform: TransformMatrix{s},
+            //         \\    instance_custom_index_and_mask: packed struct(u32) {{
+            //         \\        instance_custom_index: u24,
+            //         \\        mask: u8,
+            //         \\    }},
+            //         \\    instance_shader_binding_table_record_offset_and_flags: packed struct(u32) {{
+            //         \\        instance_shader_binding_table_record_offset: u24,
+            //         \\        flags: u8, // GeometryInstanceFlagsKHR
+            //         \\    }},
+            //         \\    acceleration_structure_reference: u64,
+            //         \\}};
+            //         \\
+            //     ,
+            //         .{maybe_author orelse ""},
+            //     );
+            //     return true;
+            // } else if (std.mem.eql(u8, basename, "VkAccelerationStructureSRTMotionInstance")) {
+            //     try self.writer.print(
+            //         \\extern struct {{
+            //         \\    transform_t0: SRTData{0s},
+            //         \\    transform_t1: SRTData{0s},
+            //         \\    instance_custom_index_and_mask: packed struct(u32) {{
+            //         \\        instance_custom_index: u24,
+            //         \\        mask: u8,
+            //         \\    }},
+            //         \\    instance_shader_binding_table_record_offset_and_flags: packed struct(u32) {{
+            //         \\        instance_shader_binding_table_record_offset: u24,
+            //         \\        flags: u8, // GeometryInstanceFlagsKHR
+            //         \\    }},
+            //         \\    acceleration_structure_reference: u64,
+            //         \\}};
+            //         \\
+            //     ,
+            //         .{maybe_author orelse ""},
+            //     );
+            //     return true;
+            // } else if (std.mem.eql(u8, basename, "VkAccelerationStructureMatrixMotionInstance")) {
+            //     try self.writer.print(
+            //         \\extern struct {{
+            //         \\    transform_t0: TransformMatrix{0s},
+            //         \\    transform_t1: TransformMatrix{0s},
+            //         \\    instance_custom_index_and_mask: packed struct(u32) {{
+            //         \\        instance_custom_index: u24,
+            //         \\        mask: u8,
+            //         \\    }},
+            //         \\    instance_shader_binding_table_record_offset_and_flags: packed struct(u32) {{
+            //         \\        instance_shader_binding_table_record_offset: u24,
+            //         \\        flags: u8, // GeometryInstanceFlagsKHR
+            //         \\    }},
+            //         \\    acceleration_structure_reference: u64,
+            //         \\}};
+            //         \\
+            //     ,
+            //         .{maybe_author orelse ""},
+            //     );
+            //     return true;
+            // }
 
             return false;
         }
@@ -874,13 +891,13 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderContainerDefaultField(self: *Self, name: []const u8, container: reg.Container, field: reg.Container.Field) !void {
-            if (mem.eql(u8, field.name, "sType")) {
+            if (mem.eql(u8, field.name, "type")) {
                 if (container.stype == null) {
                     return;
                 }
 
                 const stype = container.stype.?;
-                if (!mem.startsWith(u8, stype, "VK_STRUCTURE_TYPE_")) {
+                if (!mem.startsWith(u8, stype, "XR_TYPE_")) {
                     return error.InvalidRegistry;
                 }
 
@@ -889,8 +906,8 @@ fn Renderer(comptime WriterType: type) type {
                 _ = self.structure_types.get(stype) orelse return;
 
                 try self.writer.writeAll(" = .");
-                try self.writeIdentifierWithCase(.snake, stype["VK_STRUCTURE_TYPE_".len..]);
-            } else if (field.field_type == .name and mem.eql(u8, "VkBool32", field.field_type.name) and isFeatureStruct(name, container.extends)) {
+                try self.writeIdentifierWithCase(.snake, stype["XR_TYPE_".len..]);
+            } else if (field.field_type == .name and mem.eql(u8, "XrBool32", field.field_type.name) and isFeatureStruct(name, container.extends)) {
                 try self.writer.writeAll(" = FALSE");
             } else if (field.is_optional) {
                 if (field.field_type == .name) {
@@ -918,12 +935,14 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn isFeatureStruct(name: []const u8, maybe_extends: ?[]const []const u8) bool {
-            if (std.mem.eql(u8, name, "VkPhysicalDeviceFeatures")) return true;
-            if (maybe_extends) |extends| {
-                return for (extends) |extend| {
-                    if (mem.eql(u8, extend, "VkDeviceCreateInfo")) break true;
-                } else false;
-            }
+            _ = name;
+            _ = maybe_extends;
+            // if (std.mem.eql(u8, name, "VkPhysicalDeviceFeatures")) return true;
+            // if (maybe_extends) |extends| {
+            //     return for (extends) |extend| {
+            //         if (mem.eql(u8, extend, "VkDeviceCreateInfo")) break true;
+            //     } else false;
+            // }
             return false;
         }
 
@@ -972,24 +991,15 @@ fn Renderer(comptime WriterType: type) type {
             try self.writer.writeAll("};\n");
         }
 
-        fn bitmaskFlagsType(bitwidth: u8) ![]const u8 {
-            return switch (bitwidth) {
-                32 => "Flags",
-                64 => "Flags64",
-                else => return error.InvalidRegistry,
-            };
-        }
-
         fn renderBitmaskBits(self: *Self, name: []const u8, bits: reg.Enum) !void {
             try self.writer.writeAll("pub const ");
             try self.renderName(name);
-            const flags_type = try bitmaskFlagsType(bits.bitwidth);
-            try self.writer.print(" = packed struct({s}) {{", .{flags_type});
+            try self.writer.print(" = packed struct(Flags64) {{", .{});
 
             const bitflag_name = (try self.extractBitflagName(name)) orelse return error.InvalidRegistry;
 
             if (bits.fields.len == 0) {
-                try self.writer.print("_reserved_bits: {s} = 0,", .{flags_type});
+                try self.writer.print("_reserved_bits: Flags64 = 0,", .{});
             } else {
                 var flags_by_bitpos = [_]?[]const u8{null} ** 64;
                 for (bits.fields) |field| {
@@ -998,7 +1008,7 @@ fn Renderer(comptime WriterType: type) type {
                     }
                 }
 
-                for (flags_by_bitpos[0..bits.bitwidth], 0..) |maybe_flag_name, bitpos| {
+                for (flags_by_bitpos[0..64], 0..) |maybe_flag_name, bitpos| {
                     if (maybe_flag_name) |flag_name| {
                         const field_name = try extractBitflagFieldName(bitflag_name, flag_name);
                         try self.writeIdentifierWithCase(.snake, field_name);
@@ -1019,15 +1029,13 @@ fn Renderer(comptime WriterType: type) type {
                 // The bits structure is generated by renderBitmaskBits, but that wont
                 // output flags with no associated bits type.
 
-                const flags_type = try bitmaskFlagsType(bitmask.bitwidth);
-
                 try self.writer.writeAll("pub const ");
                 try self.renderName(name);
                 try self.writer.print(
                     \\ = packed struct {{
-                    \\_reserved_bits: {s} = 0,
+                    \\_reserved_bits: Flags64 = 0,
                     \\pub usingnamespace FlagsMixin(
-                , .{flags_type});
+                , .{});
                 try self.renderName(name);
                 try self.writer.writeAll(");\n};\n");
             }
@@ -1063,7 +1071,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderForeign(self: *Self, name: []const u8, foreign: reg.Foreign) !void {
-            if (mem.eql(u8, foreign.depends, "vk_platform")) {
+            if (mem.eql(u8, foreign.depends, "openxr_platform_defines")) {
                 return; // Skip built-in types, they are handled differently
             }
 
@@ -1090,7 +1098,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderCommandPtrName(self: *Self, name: []const u8) !void {
-            try self.writeIdentifierFmt("Pfn{s}", .{trimVkNamespace(name)});
+            try self.writeIdentifierFmt("Pfn{s}", .{trimXrNamespace(name)});
         }
 
         fn renderCommandPtrs(self: *Self) !void {
@@ -1125,14 +1133,12 @@ fn Renderer(comptime WriterType: type) type {
             defer base_commands.deinit();
             var instance_commands = std.BufSet.init(self.allocator);
             defer instance_commands.deinit();
-            var device_commands = std.BufSet.init(self.allocator);
-            defer device_commands.deinit();
             for (self.registry.features) |feature| {
                 try self.writer.writeAll("pub const ");
-                try self.writeIdentifierWithCase(.snake, trimVkNamespace(feature.name));
+                try self.writeIdentifierWithCase(.snake, trimXrNamespace(feature.name));
                 try self.writer.writeAll("= ApiInfo {\n");
-                try self.writer.print(".name = \"{s}\", .version = makeApiVersion(0, {}, {}, 0),", .{
-                    trimVkNamespace(feature.name),
+                try self.writer.print(".name = \"{s}\", .version = makeApiVersion(0, {}, {}),", .{
+                    trimXrNamespace(feature.name),
                     feature.level.major,
                     feature.level.minor,
                 });
@@ -1155,9 +1161,6 @@ fn Renderer(comptime WriterType: type) type {
                             .instance => {
                                 try instance_commands.insert(command_name);
                             },
-                            .device => {
-                                try device_commands.insert(command_name);
-                            },
                         }
                     }
                 }
@@ -1170,10 +1173,6 @@ fn Renderer(comptime WriterType: type) type {
                 try self.writer.writeAll(".instance_commands = ");
                 try self.renderCommandFlags(&instance_commands);
                 instance_commands.hash_map.clearRetainingCapacity();
-
-                try self.writer.writeAll(".device_commands = ");
-                try self.renderCommandFlags(&device_commands);
-                device_commands.hash_map.clearRetainingCapacity();
 
                 try self.writer.writeAll("};\n");
             }
@@ -1191,11 +1190,9 @@ fn Renderer(comptime WriterType: type) type {
             defer base_commands.deinit();
             var instance_commands = std.BufSet.init(self.allocator);
             defer instance_commands.deinit();
-            var device_commands = std.BufSet.init(self.allocator);
-            defer device_commands.deinit();
             for (self.registry.extensions) |ext| {
                 try self.writer.writeAll("pub const ");
-                try self.writeIdentifierWithCase(.snake, trimVkNamespace(ext.name));
+                try self.writeIdentifierWithCase(.snake, trimXrNamespace(ext.name));
                 try self.writer.writeAll("= ApiInfo {\n");
                 try self.writer.print(".name = \"{s}\", .version = {},", .{ ext.name, ext.version });
                 // collect extension functions
@@ -1217,9 +1214,6 @@ fn Renderer(comptime WriterType: type) type {
                             .instance => {
                                 try instance_commands.insert(command_name);
                             },
-                            .device => {
-                                try device_commands.insert(command_name);
-                            },
                         }
                     }
                 }
@@ -1232,10 +1226,6 @@ fn Renderer(comptime WriterType: type) type {
                 try self.renderCommandFlags(&instance_commands);
                 instance_commands.hash_map.clearRetainingCapacity();
 
-                try self.writer.writeAll(".device_commands = ");
-                try self.renderCommandFlags(&device_commands);
-                device_commands.hash_map.clearRetainingCapacity();
-
                 try self.writer.writeAll("};\n");
             }
             try self.writer.writeAll("};\n");
@@ -1246,7 +1236,7 @@ fn Renderer(comptime WriterType: type) type {
             var iterator = commands.iterator();
             while (iterator.next()) |command_name| {
                 try self.writer.writeAll(".");
-                try self.writeIdentifierWithCase(.camel, trimVkNamespace(command_name.*));
+                try self.writeIdentifierWithCase(.camel, trimXrNamespace(command_name.*));
                 try self.writer.writeAll(" = true, \n");
             }
             try self.writer.writeAll("},\n");
@@ -1304,7 +1294,6 @@ fn Renderer(comptime WriterType: type) type {
             );
             try self.renderWrappersOfDispatchType(.base);
             try self.renderWrappersOfDispatchType(.instance);
-            try self.renderWrappersOfDispatchType(.device);
         }
 
         fn renderWrappersOfDispatchType(self: *Self, dispatch_type: CommandDispatchType) !void {
@@ -1326,7 +1315,7 @@ fn Renderer(comptime WriterType: type) type {
 
                 if (classifyCommandDispatch(decl.name, command) == dispatch_type) {
                     try self.writer.writeAll("    ");
-                    try self.writeIdentifierWithCase(.camel, trimVkNamespace(decl.name));
+                    try self.writeIdentifierWithCase(.camel, trimXrNamespace(decl.name));
                     try self.writer.writeAll(": bool = false,\n");
                 }
             }
@@ -1347,7 +1336,7 @@ fn Renderer(comptime WriterType: type) type {
 
                 if (classifyCommandDispatch(decl.name, command) == dispatch_type) {
                     try self.writer.writeByte('.');
-                    try self.writeIdentifierWithCase(.camel, trimVkNamespace(decl.name));
+                    try self.writeIdentifierWithCase(.camel, trimXrNamespace(decl.name));
                     try self.writer.writeAll(" => ");
                     try self.renderCommandPtrName(decl.name);
                     try self.writer.writeAll(",\n");
@@ -1371,7 +1360,7 @@ fn Renderer(comptime WriterType: type) type {
 
                 if (classifyCommandDispatch(decl.name, command) == dispatch_type) {
                     try self.writer.writeByte('.');
-                    try self.writeIdentifierWithCase(.camel, trimVkNamespace(decl.name));
+                    try self.writeIdentifierWithCase(.camel, trimXrNamespace(decl.name));
                     try self.writer.print(
                         \\ => "{s}",
                         \\
@@ -1468,13 +1457,11 @@ fn Renderer(comptime WriterType: type) type {
             const params = switch (dispatch_type) {
                 .base => "loader: anytype",
                 .instance => "instance: Instance, loader: anytype",
-                .device => "device: Device, loader: anytype",
             };
 
             const loader_first_arg = switch (dispatch_type) {
                 .base => "Instance.null_handle",
                 .instance => "instance",
-                .device => "device",
             };
 
             @setEvalBranchQuota(2000);
@@ -1506,10 +1493,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderProxies(self: *Self) !void {
-            try self.renderProxy(.instance, "VkInstance", true);
-            try self.renderProxy(.device, "VkDevice", true);
-            try self.renderProxy(.device, "VkCommandBuffer", false);
-            try self.renderProxy(.device, "VkQueue", false);
+            try self.renderProxy(.instance, "XrInstance", true);
         }
 
         fn renderProxy(
@@ -1535,7 +1519,7 @@ fn Renderer(comptime WriterType: type) type {
                 \\                .wrapper = wrapper,
                 \\            }};
                 \\        }}
-            , .{ trimVkNamespace(dispatch_handle), loader_name });
+            , .{ trimXrNamespace(dispatch_handle), loader_name });
 
             for (self.registry.decls) |decl| {
                 const decl_type = self.resolveAlias(decl.decl_type) catch continue;
@@ -1576,7 +1560,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderProxyCommand(self: *Self, name: []const u8, command: reg.Command, dispatch_handle: []const u8) !void {
-            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "VkResult");
+            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "XrResult");
             const returns = try self.extractReturns(command);
 
             if (returns_vk_result) {
@@ -1601,7 +1585,7 @@ fn Renderer(comptime WriterType: type) type {
                 \\{
                 \\return self.wrapper.
             );
-            try self.writeIdentifierWithCase(.camel, trimVkNamespace(name));
+            try self.writeIdentifierWithCase(.camel, trimXrNamespace(name));
             try self.writer.writeByte('(');
 
             for (command.params) |param| {
@@ -1636,7 +1620,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderProxyCommandAlloc(self: *Self, wrapped_name: []const u8, command: reg.Command, dispatch_handle: []const u8) !void {
-            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "VkResult");
+            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "XrResult");
 
             const name = try self.makeAllocWrapperName(wrapped_name);
             defer self.allocator.free(name);
@@ -1658,7 +1642,7 @@ fn Renderer(comptime WriterType: type) type {
                 \\{
                 \\return self.wrapper.
             );
-            try self.writeIdentifierWithCase(.camel, trimVkNamespace(name));
+            try self.writeIdentifierWithCase(.camel, trimXrNamespace(name));
             try self.writer.writeByte('(');
 
             for (params) |param| {
@@ -1705,10 +1689,10 @@ fn Renderer(comptime WriterType: type) type {
             kind: WrapperKind,
         ) !void {
             const trimmed_name = switch (kind) {
-                .wrapper => trimVkNamespace(name),
+                .wrapper => trimXrNamespace(name),
                 .proxy => blk: {
                     // Strip additional namespaces: queue for VkQueue and cmd for VkCommandBuffer
-                    const no_vk = trimVkNamespace(name);
+                    const no_vk = trimXrNamespace(name);
                     const additional_namespace = additional_namespaces.get(dispatch_handle) orelse break :blk no_vk;
                     if (std.mem.startsWith(u8, no_vk, additional_namespace)) {
                         break :blk no_vk[additional_namespace.len..];
@@ -1756,7 +1740,7 @@ fn Renderer(comptime WriterType: type) type {
 
             try self.writer.writeAll(") ");
 
-            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "VkResult");
+            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "XrResult");
             if (returns_vk_result) {
                 try self.renderErrorSetName(name);
                 try self.writer.writeByte('!');
@@ -1807,7 +1791,7 @@ fn Renderer(comptime WriterType: type) type {
 
             if (command.return_type.* == .name) {
                 const return_name = command.return_type.name;
-                if (!mem.eql(u8, return_name, "void") and !mem.eql(u8, return_name, "VkResult")) {
+                if (!mem.eql(u8, return_name, "void") and !mem.eql(u8, return_name, "XrResult")) {
                     try returns.append(.{
                         .name = "return_value",
                         .return_value_type = command.return_type.*,
@@ -1817,7 +1801,7 @@ fn Renderer(comptime WriterType: type) type {
             }
 
             if (command.success_codes.len > 1) {
-                if (command.return_type.* != .name or !mem.eql(u8, command.return_type.name, "VkResult")) {
+                if (command.return_type.* != .name or !mem.eql(u8, command.return_type.name, "XrResult")) {
                     return error.InvalidRegistry;
                 }
 
@@ -1826,7 +1810,7 @@ fn Renderer(comptime WriterType: type) type {
                     .return_value_type = command.return_type.*,
                     .origin = .inner_return_value,
                 });
-            } else if (command.success_codes.len == 1 and !mem.eql(u8, command.success_codes[0], "VK_SUCCESS")) {
+            } else if (command.success_codes.len == 1 and !mem.eql(u8, command.success_codes[0], "XR_SUCCESS")) {
                 return error.InvalidRegistry;
             }
 
@@ -1844,11 +1828,11 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderReturnStructName(self: *Self, command_name: []const u8) !void {
-            try self.writeIdentifierFmt("{s}Result", .{trimVkNamespace(command_name)});
+            try self.writeIdentifierFmt("{s}Result", .{trimXrNamespace(command_name)});
         }
 
         fn renderErrorSetName(self: *Self, name: []const u8) !void {
-            try self.writeIdentifierWithCase(.title, trimVkNamespace(name));
+            try self.writeIdentifierWithCase(.title, trimXrNamespace(name));
             try self.writer.writeAll("Error");
         }
 
@@ -1866,7 +1850,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderWrapper(self: *Self, name: []const u8, command: reg.Command) !void {
-            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "VkResult");
+            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "XrResult");
             const returns_void = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "void");
 
             const returns = try self.extractReturns(command);
@@ -1982,7 +1966,7 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderWrapperAlloc(self: *Self, wrapped_name: []const u8, command: reg.Command) !void {
-            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "VkResult");
+            const returns_vk_result = command.return_type.* == .name and mem.eql(u8, command.return_type.name, "XrResult");
 
             const name = try self.makeAllocWrapperName(wrapped_name);
             defer self.allocator.free(name);
@@ -2068,13 +2052,13 @@ fn Renderer(comptime WriterType: type) type {
 
             for (command.success_codes) |success| {
                 try self.writer.writeAll("Result.");
-                try self.renderEnumFieldName("VkResult", success);
+                try self.renderEnumFieldName("XrResult", success);
                 try self.writer.writeAll(" => {},");
             }
 
             for (command.error_codes) |err| {
                 try self.writer.writeAll("Result.");
-                try self.renderEnumFieldName("VkResult", err);
+                try self.renderEnumFieldName("XrResult", err);
                 try self.writer.writeAll(" => return error.");
                 try self.renderResultAsErrorName(err);
                 try self.writer.writeAll(", ");
@@ -2086,7 +2070,7 @@ fn Renderer(comptime WriterType: type) type {
         fn renderErrorSet(self: *Self, errors: []const []const u8) !void {
             try self.writer.writeAll("error{");
             for (errors) |name| {
-                if (std.mem.eql(u8, name, "VK_ERROR_UNKNOWN")) {
+                if (std.mem.eql(u8, name, "XR_ERROR_UNKNOWN")) {
                     continue;
                 }
                 try self.renderResultAsErrorName(name);
@@ -2096,13 +2080,13 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderResultAsErrorName(self: *Self, name: []const u8) !void {
-            const error_prefix = "VK_ERROR_";
+            const error_prefix = "XR_ERROR_";
             if (mem.startsWith(u8, name, error_prefix)) {
                 try self.writeIdentifierWithCase(.title, name[error_prefix.len..]);
             } else {
                 // Apparently some commands (VkAcquireProfilingLockInfoKHR) return
                 // success codes as error...
-                try self.writeIdentifierWithCase(.title, trimVkNamespace(name));
+                try self.writeIdentifierWithCase(.title, trimXrNamespace(name));
             }
         }
     };
