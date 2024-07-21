@@ -81,7 +81,7 @@ const preamble =
     \\    };
     \\}
     \\pub fn makeApiVersion(major: u16, minor: u16, patch: u32) u64 {
-    \\    return (@as(u32, major) << 48) | (@as(u32, minor) << 32) | patch;
+    \\    return (@as(u64, major) << 48) | (@as(u64, minor) << 32) | patch;
     \\}
     \\pub fn apiVersionMajor(version: u64) u16 {
     \\    return @truncate(version >> 48);
@@ -174,7 +174,7 @@ const additional_namespaces = std.StaticStringMap([]const u8).initComptime(.{
 
 const dispatch_override_functions = std.StaticStringMap(CommandDispatchType).initComptime(.{
     // See https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#initialization-functionpointers
-    .{ "xrGetInstanceProcAddr", .base },
+    .{ "xrGetInstanceProcAddr", .instance },
     //.{ "vkGetDeviceProcAddr", .instance },
 
     //.{ "xrEnumerateInstanceVersion", .base },
@@ -352,6 +352,10 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn extractEnumFieldName(self: Self, enum_name: []const u8, field_name: []const u8) ![]const u8 {
+            if( std.mem.eql(u8, enum_name, "XrStructureType") ) {
+                return field_name["XR_TYPE_".len..];
+            }
+
             const adjusted_enum_name = self.id_renderer.stripAuthorTag(enum_name);
 
             var enum_it = id_render.SegmentIterator.init(adjusted_enum_name);
@@ -1477,10 +1481,12 @@ fn Renderer(comptime WriterType: type) type {
                 \\    var self: Self = undefined;
                 \\    inline for (std.meta.fields(Dispatch)) |field| {{
                 \\        const name: [*:0]const u8 = @ptrCast(field.name ++ "\x00");
-                \\        if (loader({[first_arg]s}, name)) |cmd_ptr| {{
-                \\             @field(self.dispatch, field.name) = @ptrCast(cmd_ptr);
+                \\        var ptr: PfnVoidFunction = undefined;
+                \\        const res = loader({[first_arg]s}, name, &ptr);
+                \\        if (res == Result.success) {{
+                \\             @field(self.dispatch, field.name) = @ptrCast(ptr);
                 \\        }} else {{
-                \\             std.log.err("Command loading failed for \"{{s}}\".", .{{field.name}});
+                \\             std.log.err("Command loading failed for \"{{s}}\": {{s}}.", .{{field.name, @tagName(res)}});
                 \\             return error.CommandLoadFailure;
                 \\        }}
                 \\    }}
