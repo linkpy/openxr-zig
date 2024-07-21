@@ -39,15 +39,28 @@ pub fn parseXml(backing_allocator: Allocator, root: *xml.Element) !ParseResult {
 
 fn parseDeclarations(allocator: Allocator, root: *xml.Element) ![]registry.Declaration {
     const types_elem = root.findChildByTag("types") orelse return error.InvalidRegistry;
-    const commands_elem = root.findChildByTag("commands") orelse return error.InvalidRegistry;
+    //const commands_elem = root.findChildByTag("commands") orelse return error.InvalidRegistry;
+    const commands_count = blk: {
+        var count: usize = 0;
+        var it = root.findChildrenByTag("commands");
+        while(it.next()) |el| {
+            count += el.children.len;
+        }
+        break :blk count;
+    };
 
-    const decl_upper_bound = types_elem.children.len + commands_elem.children.len;
+    const decl_upper_bound = types_elem.children.len + commands_count;
     const decls = try allocator.alloc(registry.Declaration, decl_upper_bound);
 
     var count: usize = 0;
     count += try parseTypes(allocator, decls, types_elem);
     count += try parseEnums(allocator, decls[count..], root);
-    count += try parseCommands(allocator, decls[count..], commands_elem);
+
+    var it = root.findChildrenByTag("commands");
+    while(it.next()) |cmds|{
+        count += try parseCommands(allocator, decls[count..], cmds);
+    }
+
     return decls[0..count];
 }
 

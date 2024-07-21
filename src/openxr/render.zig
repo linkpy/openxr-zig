@@ -115,6 +115,7 @@ const builtin_types = std.StaticStringMap([]const u8).initComptime(.{
     .{ "int64_t", @typeName(i64) },
     .{ "size_t", @typeName(usize) },
     .{ "int", @typeName(c_int) },
+    .{ "wchar_t", @typeName(if( @import("builtin").os.tag == .windows ) u16 else u32) }, 
 });
 
 const foreign_types = std.StaticStringMap([]const u8).initComptime(.{
@@ -218,7 +219,8 @@ fn getEnumerateFunctionDataType(command: reg.Command) !reg.TypeInfo {
     }
     const count_param = command.params[command.params.len - 2];
     if (!count_param.is_buffer_len) {
-        return error.InvalidRegistry;
+        //return error.InvalidRegistry;
+        // not applicable in openxr it seems
     }
     const data_param = command.params[command.params.len - 1];
     return switch (data_param.param_type) {
@@ -1103,6 +1105,10 @@ fn Renderer(comptime WriterType: type) type {
 
         fn renderCommandPtrs(self: *Self) !void {
             for (self.registry.decls) |decl| {
+                // needed or it generates the constant twice.
+                if( std.mem.eql(u8, decl.name, "xrGetInstanceProcAddr") )
+                    continue;
+                
                 switch (decl.decl_type) {
                     .command => {
                         try self.writer.writeAll("pub const ");
@@ -1588,18 +1594,42 @@ fn Renderer(comptime WriterType: type) type {
             try self.writeIdentifierWithCase(.camel, trimXrNamespace(name));
             try self.writer.writeByte('(');
 
+            // for (command.params) |param| {
+            //     switch (try self.classifyParam(param)) {
+            //         .out_pointer => continue,
+            //         .dispatch_handle => {
+            //             if (mem.eql(u8, param.param_type.name, dispatch_handle)) {
+            //                 try self.writer.writeAll("self.handle");
+            //             } else {
+            //                 try self.writeIdentifierWithCase(.snake, param.name);
+            //             }
+            //         },
+            //         else => {
+            //             try self.writeIdentifierWithCase(.snake, param.name);
+            //         },
+            //     }
+            //     try self.writer.writeAll(", ");
+            // }
             for (command.params) |param| {
+                const is_features_param = std.mem.eql(u8, param.name, "features");
+
                 switch (try self.classifyParam(param)) {
                     .out_pointer => continue,
                     .dispatch_handle => {
                         if (mem.eql(u8, param.param_type.name, dispatch_handle)) {
                             try self.writer.writeAll("self.handle");
                         } else {
-                            try self.writeIdentifierWithCase(.snake, param.name);
+                            if( is_features_param )
+                                try self.writer.writeAll("features_")
+                            else
+                                try self.writeIdentifierWithCase(.snake, param.name);
                         }
                     },
                     else => {
-                        try self.writeIdentifierWithCase(.snake, param.name);
+                        if( is_features_param )
+                            try self.writer.writeAll("features_")
+                        else
+                            try self.writeIdentifierWithCase(.snake, param.name);
                     },
                 }
                 try self.writer.writeAll(", ");
@@ -1646,17 +1676,25 @@ fn Renderer(comptime WriterType: type) type {
             try self.writer.writeByte('(');
 
             for (params) |param| {
+                const is_features_param = std.mem.eql(u8, param.name, "features");
+
                 switch (try self.classifyParam(param)) {
                     .out_pointer => return error.InvalidRegistry,
                     .dispatch_handle => {
                         if (mem.eql(u8, param.param_type.name, dispatch_handle)) {
                             try self.writer.writeAll("self.handle");
                         } else {
-                            try self.writeIdentifierWithCase(.snake, param.name);
+                            if( is_features_param )
+                                try self.writer.writeAll("features_")
+                            else
+                                try self.writeIdentifierWithCase(.snake, param.name);
                         }
                     },
                     else => {
-                        try self.writeIdentifierWithCase(.snake, param.name);
+                        if( is_features_param )
+                            try self.writer.writeAll("features_")
+                        else
+                            try self.writeIdentifierWithCase(.snake, param.name);
                     },
                 }
                 try self.writer.writeAll(", ");
@@ -1705,7 +1743,10 @@ fn Renderer(comptime WriterType: type) type {
         }
 
         fn renderWrapperParam(self: *Self, param: reg.Command.Param) !void {
-            try self.writeIdentifierWithCase(.snake, param.name);
+            if( std.mem.eql(u8, param.name, "features") ) {
+                try self.writer.writeAll("features_");
+            } else
+                try self.writeIdentifierWithCase(.snake, param.name);
             try self.writer.writeAll(": ");
             try self.renderTypeInfo(param.param_type);
             try self.writer.writeAll(", ");
@@ -1767,17 +1808,25 @@ fn Renderer(comptime WriterType: type) type {
             try self.writer.writeAll("(");
 
             for (command.params) |param| {
+                const is_feature_param = std.mem.eql(u8, param.name, "features");
+
                 switch (try self.classifyParam(param)) {
                     .out_pointer => {
                         try self.writer.writeByte('&');
                         try self.writeIdentifierWithCase(.snake, return_var_name.?);
                         if (returns.len > 1) {
                             try self.writer.writeByte('.');
-                            try self.writeIdentifierWithCase(.snake, derefName(param.name));
+                            if( is_feature_param )
+                                try self.writer.writeAll("features_")
+                            else
+                                try self.writeIdentifierWithCase(.snake, derefName(param.name));
                         }
                     },
                     else => {
-                        try self.writeIdentifierWithCase(.snake, param.name);
+                        if( is_feature_param )
+                            try self.writer.writeAll("features_")
+                        else
+                            try self.writeIdentifierWithCase(.snake, param.name);
                     },
                 }
 
