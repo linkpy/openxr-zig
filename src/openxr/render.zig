@@ -179,42 +179,20 @@ const dispatch_override_functions = std.StaticStringMap(CommandDispatchType).ini
 
     //.{ "xrEnumerateInstanceVersion", .base },
     .{ "xrEnumerateInstanceExtensionProperties", .base },
-    .{ "xrEnumerateInstanceLayerProperties", .base },
+    .{ "xrEnumerateApiLayerProperties", .base },
     .{ "xrCreateInstance", .base },
 });
 
 // Functions that return an array of objects via a count and data pointer.
 const enumerate_functions = std.StaticStringMap(void).initComptime(.{
-    //.{"vkEnumeratePhysicalDevices"},
-    //.{"vkEnumeratePhysicalDeviceGroups"},
-    //.{"vkGetPhysicalDeviceQueueFamilyProperties"},
-    //.{"vkGetPhysicalDeviceQueueFamilyProperties2"},
-    .{"xrEnumerateInstanceLayerProperties"},
+    .{"xrEnumerateApiLayerProperties"},
     .{"xrEnumerateInstanceExtensionProperties"},
-    //.{"vkEnumerateDeviceLayerProperties"},
-    //.{"vkEnumerateDeviceExtensionProperties"},
-    //.{"vkGetImageSparseMemoryRequirements"},
-    //.{"vkGetImageSparseMemoryRequirements2"},
-    //.{"vkGetDeviceImageSparseMemoryRequirements"},
-    //.{"vkGetPhysicalDeviceSparseImageFormatProperties"},
-    //.{"vkGetPhysicalDeviceSparseImageFormatProperties2"},
-    //.{"vkGetPhysicalDeviceToolProperties"},
-    //.{"vkGetPipelineCacheData"},
-
-    //.{"vkGetPhysicalDeviceSurfaceFormatsKHR"},
-    //.{"vkGetPhysicalDeviceSurfaceFormats2KHR"},
-    //.{"vkGetPhysicalDeviceSurfacePresentModesKHR"},
-
-    //.{"vkGetSwapchainImagesKHR"},
-    //.{"vkGetPhysicalDevicePresentRectanglesKHR"},
-
-    //.{"vkGetPhysicalDeviceCalibrateableTimeDomainsKHR"},
 });
 
 // Given one of the above commands, returns the type of the array elements
 // (and performs some basic verification that the command has the expected signature).
 fn getEnumerateFunctionDataType(command: reg.Command) !reg.TypeInfo {
-    if (command.params.len < 2) {
+    if (command.params.len < 3) {
         return error.InvalidRegistry;
     }
     const count_param = command.params[command.params.len - 2];
@@ -1496,8 +1474,9 @@ fn Renderer(comptime WriterType: type) type {
                 \\    var self: Self = undefined;
                 \\    inline for (std.meta.fields(Dispatch)) |field| {{
                 \\        const name: [*:0]const u8 = @ptrCast(field.name ++ "\x00");
-                \\        const cmd_ptr = loader({[first_arg]s}, name) orelse undefined;
-                \\        @field(self.dispatch, field.name) = @ptrCast(cmd_ptr);
+                \\        var ptr: PfnVoidFunction = undefined;
+                \\        _ = loader({[first_arg]s}, name, &ptr);
+                \\        @field(self.dispatch, field.name) = @ptrCast(ptr);
                 \\    }}
                 \\    return self;
                 \\}}
@@ -2026,10 +2005,10 @@ fn Renderer(comptime WriterType: type) type {
             const name = try self.makeAllocWrapperName(wrapped_name);
             defer self.allocator.free(name);
 
-            if (command.params.len < 2) {
+            if (command.params.len < 3) {
                 return error.InvalidRegistry;
             }
-            const params = command.params[0 .. command.params.len - 2];
+            const params = command.params[0 .. command.params.len - 3];
             const data_type = try getEnumerateFunctionDataType(command);
 
             if (returns_vk_result) {
@@ -2043,18 +2022,23 @@ fn Renderer(comptime WriterType: type) type {
             try self.renderAllocWrapperPrototype(name, params, returns_vk_result, data_type, "", .wrapper);
             try self.writer.writeAll(
                 \\{
-                \\    var count: u32 = undefined;
+                //\\    var count: u32 = undefined;
             );
 
             if (returns_vk_result) {
-                try self.writer.writeAll("var data: []");
-                try self.renderTypeInfo(data_type);
+                //try self.writer.writeAll("var data: []");
+                //try self.renderTypeInfo(data_type);
                 try self.writer.writeAll(
-                    \\ = &.{};
-                    \\errdefer allocator.free(data);
-                    \\var result = Result.incomplete;
-                    \\while (result == .incomplete) {
-                    \\    _ = try
+                    //\\ = &.{};
+                    //\\errdefer allocator.free(data);
+                    \\const count = try 
+                    // \\var result = Result.incomplete;
+                    // \\while (result == .incomplete) {
+                    // \\    _ = try
+                );
+            } else {
+                try self.writer.writeAll(
+                    \\const count = 
                 );
             }
 
@@ -2065,19 +2049,48 @@ fn Renderer(comptime WriterType: type) type {
                 try self.writeIdentifierWithCase(.snake, param.name);
                 try self.writer.writeAll(", ");
             }
-            try self.writer.writeAll("&count, null);\n");
+            try self.writer.writeAll("0, null);\n");
 
-            if (returns_vk_result) {
-                try self.writer.writeAll(
-                    \\data = try allocator.realloc(data, count);
-                    \\result = try 
-                );
-            } else {
+            // if (returns_vk_result) {
+            //     try self.writer.writeAll(
+            //         \\data = try allocator.realloc(data, count);
+            //         \\_ = try 
+            //         // \\data = try allocator.realloc(data, count);
+            //         // \\result = try 
+            //     );
+            // } else {
                 try self.writer.writeAll("const data = try allocator.alloc(");
                 try self.renderTypeInfo(data_type);
                 try self.writer.writeAll(
                     \\, count);
                     \\errdefer allocator.free(data);
+                    \\
+                );
+            //}
+
+            if( data_type == .name ) {
+                if( self.isStructWithType(data_type.name) ) |stype| {
+                    try self.writer.writeAll(
+                        \\for( data ) |*el| {
+                        \\    el.type = .
+                    );
+                    try self.writeIdentifierWithCase(.snake, stype["XR_TYPE_".len..]);
+                    try self.writer.writeAll(
+                        \\;
+                        \\    el.next = null;
+                        \\}
+                        \\
+                    );
+                }
+            }
+
+            if (returns_vk_result) {
+                try self.writer.writeAll(
+                    \\_ = try
+                );
+            } else {
+                try self.writer.writeAll(
+                    \\_ = 
                 );
             }
 
@@ -2088,16 +2101,34 @@ fn Renderer(comptime WriterType: type) type {
                 try self.writeIdentifierWithCase(.snake, param.name);
                 try self.writer.writeAll(", ");
             }
-            try self.writer.writeAll("&count, data.ptr);\n");
+            try self.writer.writeAll("count, data.ptr);\n");
 
-            if (returns_vk_result) {
-                try self.writer.writeAll("}\n");
-            }
+            // if (returns_vk_result) {
+            //     try self.writer.writeAll("}\n");
+            // }
 
             try self.writer.writeAll(
-                \\    return if (count == data.len) data else allocator.realloc(data, count);
+                \\    return data;
                 \\}
             );
+        }
+
+        fn isStructWithType(self: *Self, name: []const u8) ?[]const u8 {
+            for( self.registry.decls ) |decl| {
+                if( std.mem.eql(u8, name, decl.name) ) {
+                    switch( decl.decl_type ) {
+                        .container => |cont| {
+                            if( cont.stype ) |stype| {
+                                _ = self.structure_types.get(stype) orelse return null;
+                                return stype;
+                            }
+                        },
+                        else => return null,
+                    }
+                }
+            }
+
+            return null;
         }
 
         fn renderErrorSwitch(self: *Self, result_var: []const u8, command: reg.Command) !void {
